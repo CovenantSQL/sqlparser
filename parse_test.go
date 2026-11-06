@@ -393,12 +393,12 @@ var (
 		input:  "select /* quote in double quoted string */ \"a'a\" from t",
 		output: "select /* quote in double quoted string */ 'a''a' from t",
 	}, {
-		input: "select /* backslash quote in string */ 'a''a' from t",
+		input:  "select /* backslash quote in string */ 'a''a' from t",
 		output: "select /* backslash quote in string */ 'a''a' from t",
 	}, {
 		input: "select /* literal backslash in string */ 'a\\\\na' from t",
 	}, {
-		input:  "select /* non-escape */ '\\x' from t",
+		input: "select /* non-escape */ '\\x' from t",
 	}, {
 		input: "select /* unescaped backslash */ '\\n' from t",
 	}, {
@@ -685,6 +685,23 @@ func TestValid(t *testing.T) {
 		Walk(func(node SQLNode) (bool, error) {
 			return true, nil
 		}, tree)
+	}
+}
+
+func TestEmptySpecialComments(t *testing.T) {
+	for _, input := range []string{"select /*!*/ 1", "select /*!1234*/ 1"} {
+		queries, statements, err := ParseMultiple(NewStringTokenizer(input))
+		if err != nil {
+			t.Errorf("ParseMultiple(%q): %v", input, err)
+			continue
+		}
+		if len(queries) != 1 || queries[0] != input || len(statements) != 1 {
+			t.Errorf("ParseMultiple(%q): unexpected result %v, %v", input, queries, statements)
+			continue
+		}
+		if got := String(statements[0]); got != "select 1" {
+			t.Errorf("ParseMultiple(%q) = %q, want select 1", input, got)
+		}
 	}
 }
 
