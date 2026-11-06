@@ -509,10 +509,39 @@ scanAgain:
 
 // skipStatement scans until the EOF, or end of statement is encountered.
 func (tkn *Tokenizer) skipStatement() {
-	ch := tkn.lastChar
-	for ch != ';' && ch != eofChar {
+	for tkn.lastChar != ';' && tkn.lastChar != eofChar {
+		ch := tkn.lastChar
 		tkn.next()
-		ch = tkn.lastChar
+		// Only locate boundaries; skipped DDL need not be valid tokens.
+		switch ch {
+		case '\'', '"':
+			tkn.scanString(ch, STRING)
+		case '`':
+			tkn.scanLiteralIdentifier()
+		case '[':
+			for tkn.lastChar != ']' && tkn.lastChar != eofChar {
+				tkn.next()
+			}
+			if tkn.lastChar == ']' {
+				tkn.next()
+			}
+		case '#':
+			tkn.scanCommentType1("#")
+		case '-':
+			if tkn.lastChar == '-' {
+				tkn.next()
+				tkn.scanCommentType1("--")
+			}
+		case '/':
+			switch tkn.lastChar {
+			case '*':
+				tkn.next()
+				tkn.scanCommentType2()
+			case '/':
+				tkn.next()
+				tkn.scanCommentType1("//")
+			}
+		}
 	}
 }
 

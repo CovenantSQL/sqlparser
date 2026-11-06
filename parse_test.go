@@ -19,6 +19,7 @@ package sqlparser
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 )
@@ -722,6 +723,112 @@ func TestInsertComments(t *testing.T) {
 			if got := String(stmt); got != tc.output {
 				t.Errorf("%s(%q) = %q, want %q", parser.name, tc.input, got, tc.output)
 			}
+		}
+	}
+}
+
+func TestDDLTailSemicolons(t *testing.T) {
+	for _, prefix := range []string{"create index i on t(", "create table t (列 text check ("} {
+		for _, expression := range []string{
+			"'a;b'", `"a;b"`, "`a;b`", "[a;b]",
+			"'a'';b'", `"a"";b"`, "`a``;b`",
+			"a -- a;b\n", "a # a;b\n", "a // a;b\n",
+			"a /* a;b */", "a /*! 列;a */", "'a/*;*/--#;b'", "'a;select 2 --'",
+		} {
+			first := prefix + expression + ")"
+			if strings.HasPrefix(prefix, "create table") {
+				first += ")"
+			}
+			t.Run(first, func(t *testing.T) {
+				testDDLTail(t, first+"; select 1", []string{first, "select 1"}, false)
+			})
+		}
+	}
+}
+
+func TestDDLTailQuoteModes(t *testing.T) {
+	for _, quote := range []string{"'", `"`} {
+		// Without backslash escaping, the quote after the backslash ends it.
+		first := "create index i on t(a) where a = " + quote + "a\\" + quote
+		testDDLTail(t, first+"; select 1", []string{first, "select 1"}, false)
+		// With escaping enabled, that quote and the following semicolon stay inside.
+		first += ";b" + quote
+		testDDLTail(t, first+"; select 1", []string{first, "select 1"}, true)
+	}
+	// Backticks use doubled delimiters, regardless of the backslash mode.
+	first := "create index i on t(`a\\`)"
+	testDDLTail(t, first+"; select 1", []string{first, "select 1"}, true)
+}
+
+func TestDDLTailLeniency(t *testing.T) {
+	for _, input := range []string{
+		"create index i on t(列1a)",
+		"create index i on t(a$b)",
+		"create index i on t(a) /*! 列 */",
+		"CREATE TABLE t (列 TEXT)",
+		"CREATE TABLE t ([a] INTEGER)",
+		"CREATE TABLE t(a INT",
+	} {
+		t.Run(input, func(t *testing.T) {
+			testDDLTail(t, input, []string{input}, false)
+		})
+	}
+}
+
+func TestDDLTailUnterminated(t *testing.T) {
+	for _, tail := range []string{"'a;b", `"a;b`, "`a;b", "[a;b", "/* a;b", "-- a;b", "# a;b", "// a;b"} {
+		input := "create index i on t(a) " + tail
+		t.Run(tail, func(t *testing.T) {
+			testDDLTail(t, input, []string{input}, false)
+		})
+	}
+}
+
+func testDDLTail(t *testing.T, input string, want []string, backslash bool) {
+	t.Helper()
+	if !backslash {
+		// Parse intentionally retains master's lenient handling of partial DDL batches.
+		if stmt, err := Parse(input); err != nil {
+			t.Errorf("Parse(%q): %v", input, err)
+		} else if _, ok := stmt.(*DDL); !ok {
+			t.Errorf("Parse(%q): got %T, want DDL", input, stmt)
+		}
+	}
+	tokenizer := NewStringTokenizer(input)
+	tokenizer.AllowBackSlashEscape = backslash
+	queries, statements, err := ParseMultiple(tokenizer)
+	if err != nil {
+		t.Errorf("ParseMultiple(%q): %v", input, err)
+	} else if len(queries) != len(want) || len(statements) != len(want) {
+		t.Errorf("ParseMultiple(%q): got %v and %d statements, want %v", input, queries, len(statements), want)
+	} else {
+		for i, query := range queries {
+			if query != want[i] {
+				t.Errorf("ParseMultiple(%q): query %d = %q, want %q", input, i, query, want[i])
+			}
+		}
+	}
+	for _, tokenizer := range []*Tokenizer{NewStringTokenizer(input), NewTokenizer(strings.NewReader(input))} {
+		tokenizer.AllowBackSlashEscape = backslash
+		for i := range want {
+			stmt, err := ParseNext(tokenizer)
+			if err != nil {
+				t.Errorf("ParseNext(%q), statement %d: %v", input, i, err)
+				break
+			}
+			if i == 0 {
+				if _, ok := stmt.(*DDL); !ok {
+					t.Errorf("ParseNext(%q): got %T, want DDL", input, stmt)
+				}
+				if tokenizer.Position != len(want[0])+1 {
+					t.Errorf("ParseNext(%q): stopped at %d, want %d", input, tokenizer.Position, len(want[0])+1)
+				}
+			} else if String(stmt) != "select 1" {
+				t.Errorf("ParseNext(%q): second statement = %q, want select 1", input, String(stmt))
+			}
+		}
+		if _, err := ParseNext(tokenizer); err != io.EOF {
+			t.Errorf("ParseNext(%q): got %v after last statement, want EOF", input, err)
 		}
 	}
 }
