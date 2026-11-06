@@ -506,16 +506,9 @@ var (
 		input:  "insert /* set */ into a set a = 1, b = 2",
 		output: "insert /* set */ into a(a, b) values (1, 2)",
 	}, {
-		input:  "insert /* set default */ into a set a = default, b = 2",
-		output: "insert /* set default */ into a(a, b) values (default, 2)",
-	}, {
 		input: "insert /* value expression list */ into a values (a + 1, 2 * 3)",
 	}, {
-		input: "insert /* default */ into a values (default, 2 * 3)",
-	}, {
 		input: "insert /* column list */ into a(a, b) values (1, 2)",
-	}, {
-		input: "insert into a(a, b) values (1, ifnull(null, default(b)))",
 	}, {
 		input: "insert /* qualified column list */ into a(a, b) values (1, 2)",
 	}, {
@@ -1117,6 +1110,15 @@ var (
 		output       string
 		excludeMulti bool // Don't use in the ParseNext multi-statement parsing tests.
 	}{{
+		input:  "insert /* set default */ into a set a = default, b = 2",
+		output: "syntax error at position 48 near 'default'",
+	}, {
+		input:  "insert /* default */ into a values (default, 2 * 3)",
+		output: "syntax error at position 44 near 'default'",
+	}, {
+		input:  "insert into a(a, b) values (1, ifnull(null, default(b)))",
+		output: "syntax error at position 52 near 'default'",
+	}, {
 		input:  "select $ from t",
 		output: "syntax error at position 9 near '$'",
 	}, {
