@@ -216,6 +216,10 @@ func TestExtractMysqlComment(t *testing.T) {
 	var testCases = []struct {
 		input, outSQL, outVersion string
 	}{{
+		input: "/*!*/",
+	}, {
+		input: "/*!1234*/",
+	}, {
 		input:      "/*!50708SET max_execution_time=5000 */",
 		outSQL:     "SET max_execution_time=5000",
 		outVersion: "50708",
@@ -346,4 +350,3 @@ func TestExtractCommentDirectives(t *testing.T) {
 		t.Errorf("d.IsSet(six) should be false")
 	}
 }
-
