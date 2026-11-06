@@ -18,8 +18,33 @@ package sqlparser
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"runtime/debug"
+	"strings"
 	"testing"
 )
+
+func TestVersionedCommentStack(t *testing.T) {
+	if os.Getenv("SQLPARSER_STACK_TEST") == "1" {
+		debug.SetMaxStack(256 << 10)
+		input := strings.Repeat("/*! */", 10000) + "select 1"
+		queries, statements, err := ParseMultiple(NewStringTokenizer(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(queries) != 1 || queries[0] != input || len(statements) != 1 || String(statements[0]) != "select 1" {
+			t.Fatalf("unexpected parse result: %v, %v", queries, statements)
+		}
+		return
+	}
+	// A stack overflow terminates the process, so constrain only a child.
+	cmd := exec.Command(os.Args[0], "-test.run=^TestVersionedCommentStack$")
+	cmd.Env = append(os.Environ(), "SQLPARSER_STACK_TEST=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bounded-stack parsing failed: %v\n%s", err, output)
+	}
+}
 
 func TestLiteralID(t *testing.T) {
 	testcases := []struct {

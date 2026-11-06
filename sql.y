@@ -168,7 +168,7 @@ func forceEOF(yylex interface{}) {
 %type <ddl> create_table_prefix
 %type <statement> show_statement other_statement
 %type <bytes2> comment_opt comment_list
-%type <str> union_op insert_or_replace
+%type <str> union_op
 %type <str> distinct_opt separator_opt
 %type <expr> like_escape_opt
 %type <selectExprs> select_expression_list select_expression_list_opt
@@ -184,7 +184,7 @@ func forceEOF(yylex interface{}) {
 %type <expr> condition
 %type <boolVal> boolean_value
 %type <str> compare
-%type <ins> insert_data
+%type <ins> insert_data insert_or_replace
 %type <expr> value value_expression
 %type <expr> function_call_keyword function_call_nonkeyword function_call_generic function_call_conflict
 %type <str> is_suffix
@@ -308,39 +308,39 @@ union_rhs:
 
 
 insert_statement:
-  insert_or_replace comment_opt ignore_opt into_table_name insert_data
+  insert_or_replace ignore_opt into_table_name insert_data
   {
     // insert_data returns a *Insert pre-filled with Columns & Values
-    ins := $5
-    ins.Action = $1
-    ins.Comments = $2
-    ins.Ignore = $3
-    ins.Table = $4
+    ins := $4
+    ins.Action = $1.Action
+    ins.Comments = $1.Comments
+    ins.Ignore = $2
+    ins.Table = $3
     $$ = ins
   }
-| insert_or_replace comment_opt ignore_opt into_table_name SET update_list
+| insert_or_replace ignore_opt into_table_name SET update_list
   {
-    cols := make(Columns, 0, len($6))
-    vals := make(ValTuple, 0, len($6))
-    for _, updateList := range $6 {
+    cols := make(Columns, 0, len($5))
+    vals := make(ValTuple, 0, len($5))
+    for _, updateList := range $5 {
       cols = append(cols, updateList.Name.Name)
       vals = append(vals, updateList.Expr)
     }
-    $$ = &Insert{Action: $1, Comments: Comments($2), Ignore: $3, Table: $4, Columns: cols, Rows: Values{vals}}
+    $$ = &Insert{Action: $1.Action, Comments: $1.Comments, Ignore: $2, Table: $3, Columns: cols, Rows: Values{vals}}
   }
 
 insert_or_replace:
-  INSERT
+  INSERT comment_opt
   {
-    $$ = InsertStr
+    $$ = &Insert{Action: InsertStr, Comments: Comments($2)}
   }
-| REPLACE
+| REPLACE comment_opt
   {
-    $$ = ReplaceStr
+    $$ = &Insert{Action: ReplaceStr, Comments: Comments($2)}
   }
-| INSERT OR REPLACE
+| INSERT comment_opt OR REPLACE comment_opt
   {
-    $$ = ReplaceStr
+    $$ = &Insert{Action: ReplaceStr, Comments: Comments(append($2, $5...))}
   }
 
 update_statement:
