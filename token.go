@@ -42,6 +42,7 @@ type Tokenizer struct {
 	lastChar               uint16
 	Position               int
 	lastToken              []byte
+	errorDelimiter         uint16 // Unclosed delimiter at a lexical error.
 	LastError              error
 	posVarIndex            int
 	ParseTree              Statement
@@ -354,6 +355,12 @@ func (tkn *Tokenizer) Error(err string) {
 	}
 	tkn.LastError = errors.New(buf.String())
 
+	// Finish a construct whose opener the failing token already consumed.
+	if tkn.errorDelimiter != 0 {
+		tkn.skipToDelimiter(tkn.errorDelimiter)
+		tkn.errorDelimiter = 0
+	}
+
 	// Try and re-sync to the next statement
 	if tkn.lastChar != ';' {
 		tkn.skipStatement()
@@ -363,6 +370,7 @@ func (tkn *Tokenizer) Error(err string) {
 // Scan scans the tokenizer for the next token and returns
 // the token type and an optional value.
 func (tkn *Tokenizer) Scan() (int, []byte) {
+	tkn.errorDelimiter = 0
 scanAgain:
 	if tkn.specialComment != nil {
 		// Enter specialComment scan mode.
@@ -502,6 +510,9 @@ scanAgain:
 		case '`':
 			return tkn.scanLiteralIdentifier()
 		default:
+			if ch == '[' {
+				tkn.errorDelimiter = ']'
+			}
 			return LEX_ERROR, []byte{byte(ch)}
 		}
 	}
@@ -519,12 +530,7 @@ func (tkn *Tokenizer) skipStatement() {
 		case '`':
 			tkn.scanLiteralIdentifier()
 		case '[':
-			for tkn.lastChar != ']' && tkn.lastChar != eofChar {
-				tkn.next()
-			}
-			if tkn.lastChar == ']' {
-				tkn.next()
-			}
+			tkn.skipToDelimiter(']')
 		case '#':
 			tkn.scanCommentType1("#")
 		case '-':
@@ -542,6 +548,16 @@ func (tkn *Tokenizer) skipStatement() {
 				tkn.scanCommentType1("//")
 			}
 		}
+	}
+}
+
+// skipToDelimiter resumes after an already consumed opening delimiter.
+func (tkn *Tokenizer) skipToDelimiter(delim uint16) {
+	for tkn.lastChar != delim && tkn.lastChar != eofChar {
+		tkn.next()
+	}
+	if tkn.lastChar == delim {
+		tkn.next()
 	}
 }
 
@@ -576,6 +592,7 @@ func (tkn *Tokenizer) scanHex() (int, []byte) {
 	buffer := &bytes2.Buffer{}
 	tkn.scanMantissa(16, buffer)
 	if tkn.lastChar != '\'' {
+		tkn.errorDelimiter = '\''
 		return LEX_ERROR, buffer.Bytes()
 	}
 	tkn.next()

@@ -842,6 +842,94 @@ func TestDDLTailUnterminated(t *testing.T) {
 	}
 }
 
+func TestDDLRecoveryOpeners(t *testing.T) {
+	for _, first := range []string{
+		"CREATE TABLE t ([a;b] INTEGER)",
+		"CREATE TABLE t ([a'b] INTEGER)",
+		"CREATE TABLE t ([a--b] INTEGER)",
+		"CREATE TABLE t(a TEXT DEFAULT X'g;h')",
+		// These errors are already past a closing delimiter, or inside a
+		// fully consumed executable comment, and must not reopen it.
+		"CREATE TABLE t '['",
+		"CREATE TABLE t(a TEXT DEFAULT X'a')",
+		"CREATE TABLE t (`` INT)",
+		"CREATE TABLE t (/*! [ */ a INT)",
+	} {
+		t.Run(first, func(t *testing.T) {
+			testDDLTail(t, first+"; select 1", []string{first, "select 1"}, false)
+		})
+	}
+}
+
+func TestExplainTailSemicolons(t *testing.T) {
+	first := "EXPLAIN SELECT 'a;b'"
+	input := first + "; SELECT 1"
+	if _, err := Parse(input); err != nil {
+		t.Fatal(err)
+	}
+	queries, statements, err := ParseMultiple(NewStringTokenizer(input))
+	if err != nil || len(queries) != 2 || len(statements) != 2 || queries[0] != first || queries[1] != "SELECT 1" {
+		t.Fatalf("ParseMultiple(%q): %v, %v, %v", input, queries, statements, err)
+	}
+	if _, ok := statements[0].(*Explain); !ok || String(statements[1]) != "select 1" {
+		t.Fatalf("unexpected statements: %T, %v", statements[0], statements[1])
+	}
+	for _, tokenizer := range []*Tokenizer{NewStringTokenizer(input), NewTokenizer(strings.NewReader(input))} {
+		if stmt, err := ParseNext(tokenizer); err != nil {
+			t.Fatal(err)
+		} else if _, ok := stmt.(*Explain); !ok || tokenizer.Position != len(first)+1 {
+			t.Fatalf("EXPLAIN boundary: %T at %d", stmt, tokenizer.Position)
+		}
+		if stmt, err := ParseNext(tokenizer); err != nil || String(stmt) != "select 1" {
+			t.Fatalf("second statement: %v, %v", stmt, err)
+		}
+		if _, err := ParseNext(tokenizer); err != io.EOF {
+			t.Fatalf("after last statement: %v", err)
+		}
+	}
+}
+
+func TestParseNextRecoverySemicolons(t *testing.T) {
+	for _, first := range []string{"SELECT ) 'a;b'", "SELECT X'g;h'", "SELECT [a'b]"} {
+		input := first + "; SELECT 1"
+		for _, tokenizer := range []*Tokenizer{NewStringTokenizer(input), NewTokenizer(strings.NewReader(input))} {
+			if _, err := ParseNext(tokenizer); err == nil {
+				t.Fatalf("ParseNext(%q): want first-statement error", input)
+			}
+			if tokenizer.Position != len(first)+1 {
+				t.Errorf("ParseNext(%q): recovered at %d, want %d", input, tokenizer.Position, len(first)+1)
+			}
+			if stmt, err := ParseNext(tokenizer); err != nil || String(stmt) != "select 1" {
+				t.Errorf("recovered statement from %q: %v, %v", input, stmt, err)
+			}
+			if _, err := ParseNext(tokenizer); err != io.EOF {
+				t.Errorf("after last statement: %v", err)
+			}
+		}
+	}
+}
+
+func TestParseNextRecoveryUnterminatedHex(t *testing.T) {
+	input := "select x'78 from t; select 1 from t"
+	for _, tokenizer := range []*Tokenizer{NewStringTokenizer(input), NewTokenizer(strings.NewReader(input))} {
+		if _, err := ParseNext(tokenizer); err == nil {
+			t.Fatal("want an unterminated hex literal error")
+		}
+		if _, err := ParseNext(tokenizer); err != io.EOF {
+			t.Fatalf("unterminated hex literal: got %v, want EOF", err)
+		}
+	}
+}
+
+func TestDDLTailReaderBoundary(t *testing.T) {
+	prefix := "create index i on t(a) "
+	for _, tail := range []string{"'a;b'", "/* a;b */"} {
+		// The construct opens in the first Reader buffer and ends in the next.
+		first := prefix + strings.Repeat(" ", defaultBufSize-2-len(prefix)) + tail
+		testDDLTail(t, first+"; select 1", []string{first, "select 1"}, false)
+	}
+}
+
 func testDDLTail(t *testing.T, input string, want []string, backslash bool) {
 	t.Helper()
 	if !backslash {
@@ -1355,8 +1443,9 @@ var (
 		input:  "select 0xH from t",
 		output: "syntax error at position 10 near '0x'",
 	}, {
-		input:  "select x'78 from t",
-		output: "syntax error at position 12 near '78'",
+		input:        "select x'78 from t",
+		output:       "syntax error at position 12 near '78'",
+		excludeMulti: true,
 	}, {
 		input:  "select x'777' from t",
 		output: "syntax error at position 14 near '777'",
