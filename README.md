@@ -2,9 +2,10 @@
 
 Go package for parsing SQLite or SQL-92 queries.
 
-The module supports Go 1.11 and later. Regenerate `sql.go` with
-`make -B sql.go` using Go 1.16 or later; the Makefile pins the generator
-that reproduces the committed parser byte for byte.
+The module builds with Go 1.11 and later. Regenerating `sql.go` with
+`make -B sql.go` requires Go 1.17 or later for versioned `go run` support.
+The Makefile pins the generator that reproduces the committed parser byte
+for byte.
 
 ## Notice
 
