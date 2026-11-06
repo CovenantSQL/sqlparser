@@ -506,16 +506,9 @@ var (
 		input:  "insert /* set */ into a set a = 1, b = 2",
 		output: "insert /* set */ into a(a, b) values (1, 2)",
 	}, {
-		input:  "insert /* set default */ into a set a = default, b = 2",
-		output: "insert /* set default */ into a(a, b) values (default, 2)",
-	}, {
 		input: "insert /* value expression list */ into a values (a + 1, 2 * 3)",
 	}, {
-		input: "insert /* default */ into a values (default, 2 * 3)",
-	}, {
 		input: "insert /* column list */ into a(a, b) values (1, 2)",
-	}, {
-		input: "insert into a(a, b) values (1, ifnull(null, default(b)))",
 	}, {
 		input: "insert /* qualified column list */ into a(a, b) values (1, 2)",
 	}, {
@@ -685,6 +678,51 @@ func TestValid(t *testing.T) {
 		Walk(func(node SQLNode) (bool, error) {
 			return true, nil
 		}, tree)
+	}
+}
+
+func TestInsertComments(t *testing.T) {
+	cases := []struct {
+		input, output string
+	}{
+		{"insert /* first */ /* second */ into t values (1)", "insert /* first */ /* second */ into t values (1)"},
+		{"replace /* first */ into t values (1)", "replace /* first */ into t values (1)"},
+		{"insert or replace /* first */ into t values (1)", "replace /* first */ into t values (1)"},
+		{"insert /* first */ or replace /* second */ into t values (1)", "replace /* first */ /* second */ into t values (1)"},
+		{"insert /* first */ into t set a = 1", "insert /* first */ into t(a) values (1)"},
+		{"insert or replace /* first */ into t set a = 1", "replace /* first */ into t(a) values (1)"},
+	}
+	parsers := []struct {
+		name  string
+		parse func(string) (Statement, error)
+	}{
+		{"Parse", Parse},
+		{"ParseStrictDDL", ParseStrictDDL},
+		{"ParseNext", func(sql string) (Statement, error) {
+			return ParseNext(NewTokenizer(strings.NewReader(sql)))
+		}},
+		{"ParseMultiple", func(sql string) (Statement, error) {
+			queries, statements, err := ParseMultiple(NewStringTokenizer(sql))
+			if err != nil {
+				return nil, err
+			}
+			if len(queries) != 1 || queries[0] != sql || len(statements) != 1 {
+				return nil, fmt.Errorf("unexpected statements: %v, %v", queries, statements)
+			}
+			return statements[0], nil
+		}},
+	}
+	for _, parser := range parsers {
+		for _, tc := range cases {
+			stmt, err := parser.parse(tc.input)
+			if err != nil {
+				t.Errorf("%s(%q): %v", parser.name, tc.input, err)
+				continue
+			}
+			if got := String(stmt); got != tc.output {
+				t.Errorf("%s(%q) = %q, want %q", parser.name, tc.input, got, tc.output)
+			}
+		}
 	}
 }
 
@@ -1134,6 +1172,15 @@ var (
 		output       string
 		excludeMulti bool // Don't use in the ParseNext multi-statement parsing tests.
 	}{{
+		input:  "insert /* set default */ into a set a = default, b = 2",
+		output: "syntax error at position 48 near 'default'",
+	}, {
+		input:  "insert /* default */ into a values (default, 2 * 3)",
+		output: "syntax error at position 44 near 'default'",
+	}, {
+		input:  "insert into a(a, b) values (1, ifnull(null, default(b)))",
+		output: "syntax error at position 52 near 'default'",
+	}, {
 		input:  "select $ from t",
 		output: "syntax error at position 9 near '$'",
 	}, {
