@@ -565,6 +565,10 @@ float_length_opt:
   {
     $$ = LengthScaleOption{}
   }
+| '(' INTEGRAL ')'
+  {
+    $$ = LengthScaleOption{Length: NewIntVal($2)}
+  }
 | '(' INTEGRAL ',' INTEGRAL ')'
   {
     $$ = LengthScaleOption{
