@@ -13,9 +13,10 @@
 # limitations under the License.
 
 MAKEFLAGS = -s
+GOYACC = go run golang.org/x/tools/cmd/goyacc@v0.0.0-20180926032708-9eb9690e392a
 
 sql.go: sql.y
-	goyacc -o sql.go sql.y
+	$(GOYACC) -o sql.go sql.y
 	gofmt -w sql.go
 
 clean:
