@@ -393,12 +393,12 @@ var (
 		input:  "select /* quote in double quoted string */ \"a'a\" from t",
 		output: "select /* quote in double quoted string */ 'a''a' from t",
 	}, {
-		input: "select /* backslash quote in string */ 'a''a' from t",
+		input:  "select /* backslash quote in string */ 'a''a' from t",
 		output: "select /* backslash quote in string */ 'a''a' from t",
 	}, {
 		input: "select /* literal backslash in string */ 'a\\\\na' from t",
 	}, {
-		input:  "select /* non-escape */ '\\x' from t",
+		input: "select /* non-escape */ '\\x' from t",
 	}, {
 		input: "select /* unescaped backslash */ '\\n' from t",
 	}, {
@@ -685,6 +685,40 @@ func TestValid(t *testing.T) {
 		Walk(func(node SQLNode) (bool, error) {
 			return true, nil
 		}, tree)
+	}
+}
+
+func TestFloatColumnPrecision(t *testing.T) {
+	for _, typ := range []string{"float", "double", "real"} {
+		input := "create table t (a " + typ + "(24) default current_timestamp)"
+		queries, statements, err := ParseMultiple(NewStringTokenizer(input))
+		if err != nil {
+			t.Errorf("ParseMultiple(%q): %v", input, err)
+			continue
+		}
+		if len(queries) != 1 || queries[0] != input || len(statements) != 1 {
+			t.Errorf("ParseMultiple(%q): unexpected result %v, %v", input, queries, statements)
+			continue
+		}
+		ddl := statements[0].(*DDL)
+		if ddl.TableSpec == nil || len(ddl.TableSpec.Columns) != 1 {
+			t.Errorf("ParseMultiple(%q): missing column specification", input)
+			continue
+		}
+		column := ddl.TableSpec.Columns[0].Type
+		if column.Type != typ || column.Length == nil || string(column.Length.Val) != "24" || column.Scale != nil {
+			t.Errorf("ParseMultiple(%q): unexpected column type %+v", input, column)
+		}
+		foundDefault := false
+		Walk(func(node SQLNode) (bool, error) {
+			if value, ok := node.(*SQLVal); ok && value.Type == ValArg && bytes.EqualFold(value.Val, []byte("current_timestamp")) {
+				foundDefault = true
+			}
+			return true, nil
+		}, column.Default)
+		if !foundDefault {
+			t.Errorf("ParseMultiple(%q): missing stateful default", input)
+		}
 	}
 }
 
