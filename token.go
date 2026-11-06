@@ -363,6 +363,7 @@ func (tkn *Tokenizer) Error(err string) {
 // Scan scans the tokenizer for the next token and returns
 // the token type and an optional value.
 func (tkn *Tokenizer) Scan() (int, []byte) {
+scanAgain:
 	if tkn.specialComment != nil {
 		// Enter specialComment scan mode.
 		// for scanning such kind of comment: /*! MySQL-specific code */
@@ -446,7 +447,10 @@ func (tkn *Tokenizer) Scan() (int, []byte) {
 				tkn.next()
 				switch tkn.lastChar {
 				case '!':
-					return tkn.scanMySQLSpecificComment()
+					if typ, val := tkn.scanMySQLSpecificComment(); typ != 0 {
+						return typ, val
+					}
+					goto scanAgain
 				default:
 					return tkn.scanCommentType2()
 				}
@@ -769,7 +773,7 @@ func (tkn *Tokenizer) scanMySQLSpecificComment() (int, []byte) {
 	}
 	_, sql := ExtractMysqlComment(buffer.String())
 	tkn.specialComment = NewStringTokenizer(sql)
-	return tkn.Scan()
+	return 0, nil
 }
 
 func (tkn *Tokenizer) consumeNext(buffer *bytes2.Buffer) {
