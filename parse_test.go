@@ -887,6 +887,23 @@ func TestKeywords(t *testing.T) {
 	}
 }
 
+func TestEmptySpecialComments(t *testing.T) {
+	for _, input := range []string{"select /*!*/ 1", "select /*!1234*/ 1"} {
+		queries, statements, err := ParseMultiple(NewStringTokenizer(input))
+		if err != nil {
+			t.Errorf("ParseMultiple(%q): %v", input, err)
+			continue
+		}
+		if len(queries) != 1 || queries[0] != input || len(statements) != 1 {
+			t.Errorf("ParseMultiple(%q): unexpected result %v, %v", input, queries, statements)
+			continue
+		}
+		if got := String(statements[0]); got != "select 1" {
+			t.Errorf("ParseMultiple(%q) = %q, want select 1", input, got)
+		}
+	}
+}
+
 func TestConvert(t *testing.T) {
 	validSQL := []struct {
 		input  string

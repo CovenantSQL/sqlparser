@@ -2,6 +2,11 @@
 
 Go package for parsing SQLite or SQL-92 queries.
 
+The module builds with Go 1.11 and later. Regenerating `sql.go` with
+`make -B sql.go` requires Go 1.17 or later for versioned `go run` support.
+The Makefile pins the generator that reproduces the committed parser byte
+for byte.
+
 ## Notice
 
 The backbone of this repo is extracted from [vitessio/vitess](https://github.com/vitessio/vitess).
