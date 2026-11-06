@@ -722,6 +722,30 @@ func TestFloatColumnPrecision(t *testing.T) {
 	}
 }
 
+func TestFloatColumnPrecisionSemicolonDefault(t *testing.T) {
+	for _, typ := range []string{"float", "double", "real"} {
+		input := "create table t (a " + typ + "(24) default 'a;b')"
+		queries, statements, err := ParseMultiple(NewStringTokenizer(input))
+		if err != nil {
+			t.Errorf("ParseMultiple(%q): %v", input, err)
+			continue
+		}
+		if len(queries) != 1 || queries[0] != input || len(statements) != 1 {
+			t.Errorf("ParseMultiple(%q): unexpected result %v, %v", input, queries, statements)
+			continue
+		}
+		ddl := statements[0].(*DDL)
+		if ddl.TableSpec == nil || len(ddl.TableSpec.Columns) != 1 {
+			t.Errorf("ParseMultiple(%q): missing column specification", input)
+			continue
+		}
+		value := ddl.TableSpec.Columns[0].Type.Default
+		if value == nil || value.Type != StrVal || string(value.Val) != "a;b" {
+			t.Errorf("ParseMultiple(%q): unexpected default %v", input, value)
+		}
+	}
+}
+
 func TestCaseSensitivity(t *testing.T) {
 	validSQL := []struct {
 		input  string
