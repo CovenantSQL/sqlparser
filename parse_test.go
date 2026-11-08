@@ -19,6 +19,7 @@ package sqlparser
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 )
@@ -780,6 +781,214 @@ func TestFloatColumnPrecisionSemicolonDefault(t *testing.T) {
 		value := ddl.TableSpec.Columns[0].Type.Default
 		if value == nil || value.Type != StrVal || string(value.Val) != "a;b" {
 			t.Errorf("ParseMultiple(%q): unexpected default %v", input, value)
+		}
+	}
+}
+
+func TestSkippedTailSingleStatements(t *testing.T) {
+	for _, input := range []string{
+		"EXPLAIN SELECT 'a;select 2 --'",
+		"create index i on t(a) where a = 'x;select 2 --'",
+	} {
+		t.Run(input, func(t *testing.T) {
+			if _, err := Parse(input); err != nil {
+				t.Fatal(err)
+			}
+			queries, statements, err := ParseMultiple(NewStringTokenizer(input))
+			if err != nil || len(queries) != 1 || len(statements) != 1 || queries[0] != input {
+				t.Fatalf("want one unchanged statement: %v, %v, %v", queries, statements, err)
+			}
+			for _, tokenizer := range []*Tokenizer{NewStringTokenizer(input), NewTokenizer(strings.NewReader(input))} {
+				if _, err := ParseNext(tokenizer); err != nil {
+					t.Fatal(err)
+				}
+				if tokenizer.Position != len(input)+1 {
+					t.Errorf("stopped at %d, want EOF at %d", tokenizer.Position, len(input)+1)
+				}
+				if _, err := ParseNext(tokenizer); err != io.EOF {
+					t.Errorf("after single statement: %v, want EOF", err)
+				}
+			}
+		})
+	}
+}
+
+func TestDDLTailSemicolons(t *testing.T) {
+	for _, prefix := range []string{"create index i on t(", "create table t (列 text check ("} {
+		for _, expression := range []string{
+			"'a;b'", `"a;b"`, "`a;b`", "[a;b]",
+			"'a'';b'", `"a"";b"`, "`a``;b`",
+			"a -- a;b\n", "a # a;b\n", "a // a;b\n",
+			"a /* a;b */", "a /*! 列;a */", "'a/*;*/--#;b'", "'a;select 2 --'",
+		} {
+			first := prefix + expression + ")"
+			if strings.HasPrefix(prefix, "create table") {
+				first += ")"
+			}
+			t.Run(first, func(t *testing.T) {
+				testDDLTail(t, first+"; select 1", []string{first, "select 1"}, false)
+			})
+		}
+	}
+}
+
+func TestDDLTailQuoteModes(t *testing.T) {
+	for _, quote := range []string{"'", `"`} {
+		// Without backslash escaping, the quote after the backslash ends it.
+		first := "create index i on t(a) where a = " + quote + "a\\" + quote
+		testDDLTail(t, first+"; select 1", []string{first, "select 1"}, false)
+		// With escaping enabled, that quote and the following semicolon stay inside.
+		first += ";b" + quote
+		testDDLTail(t, first+"; select 1", []string{first, "select 1"}, true)
+	}
+	// Backticks use doubled delimiters, regardless of the backslash mode.
+	first := "create index i on t(`a\\`)"
+	testDDLTail(t, first+"; select 1", []string{first, "select 1"}, true)
+}
+
+func TestDDLTailLeniency(t *testing.T) {
+	for _, input := range []string{
+		"create index i on t(列1a)",
+		"create index i on t(a$b)",
+		"create index i on t(a) /*! 列 */",
+		"CREATE TABLE t (列 TEXT)",
+		"CREATE TABLE t ([a] INTEGER)",
+		"CREATE TABLE t(a INT",
+	} {
+		t.Run(input, func(t *testing.T) {
+			testDDLTail(t, input, []string{input}, false)
+		})
+	}
+}
+
+func TestDDLTailUnterminated(t *testing.T) {
+	for _, tail := range []string{"'a;b", `"a;b`, "`a;b", "[a;b", "/* a;b", "-- a;b", "# a;b", "// a;b"} {
+		input := "create index i on t(a) " + tail
+		t.Run(tail, func(t *testing.T) {
+			testDDLTail(t, input, []string{input}, false)
+		})
+	}
+}
+
+func TestDDLRecoveryOpeners(t *testing.T) {
+	for _, first := range []string{
+		"CREATE TABLE t ([a;b] INTEGER)",
+		"CREATE TABLE t ([a'b] INTEGER)",
+		"CREATE TABLE t ([a--b] INTEGER)",
+		// These errors are already past a closing delimiter, or inside a
+		// fully consumed executable comment, and must not reopen it.
+		"CREATE TABLE t '['",
+		"CREATE TABLE t (`` INT)",
+		"CREATE TABLE t (/*! [ */ a INT)",
+	} {
+		t.Run(first, func(t *testing.T) {
+			testDDLTail(t, first+"; select 1", []string{first, "select 1"}, false)
+		})
+	}
+}
+
+func TestExplainTailSemicolons(t *testing.T) {
+	first := "EXPLAIN SELECT 'a;b'"
+	input := first + "; SELECT 1"
+	if _, err := Parse(input); err != nil {
+		t.Fatal(err)
+	}
+	queries, statements, err := ParseMultiple(NewStringTokenizer(input))
+	if err != nil || len(queries) != 2 || len(statements) != 2 || queries[0] != first || queries[1] != "SELECT 1" {
+		t.Fatalf("ParseMultiple(%q): %v, %v, %v", input, queries, statements, err)
+	}
+	if _, ok := statements[0].(*Explain); !ok || String(statements[1]) != "select 1" {
+		t.Fatalf("unexpected statements: %T, %v", statements[0], statements[1])
+	}
+	for _, tokenizer := range []*Tokenizer{NewStringTokenizer(input), NewTokenizer(strings.NewReader(input))} {
+		if stmt, err := ParseNext(tokenizer); err != nil {
+			t.Fatal(err)
+		} else if _, ok := stmt.(*Explain); !ok || tokenizer.Position != len(first)+1 {
+			t.Fatalf("EXPLAIN boundary: %T at %d", stmt, tokenizer.Position)
+		}
+		if stmt, err := ParseNext(tokenizer); err != nil || String(stmt) != "select 1" {
+			t.Fatalf("second statement: %v, %v", stmt, err)
+		}
+		if _, err := ParseNext(tokenizer); err != io.EOF {
+			t.Fatalf("after last statement: %v", err)
+		}
+	}
+}
+
+func TestParseNextRecoverySemicolons(t *testing.T) {
+	for _, first := range []string{"SELECT ) 'a;b'", "SELECT [a'b]"} {
+		input := first + "; SELECT 1"
+		for _, tokenizer := range []*Tokenizer{NewStringTokenizer(input), NewTokenizer(strings.NewReader(input))} {
+			if _, err := ParseNext(tokenizer); err == nil {
+				t.Fatalf("ParseNext(%q): want first-statement error", input)
+			}
+			if tokenizer.Position != len(first)+1 {
+				t.Errorf("ParseNext(%q): recovered at %d, want %d", input, tokenizer.Position, len(first)+1)
+			}
+			if stmt, err := ParseNext(tokenizer); err != nil || String(stmt) != "select 1" {
+				t.Errorf("recovered statement from %q: %v, %v", input, stmt, err)
+			}
+			if _, err := ParseNext(tokenizer); err != io.EOF {
+				t.Errorf("after last statement: %v", err)
+			}
+		}
+	}
+}
+
+func TestDDLTailReaderBoundary(t *testing.T) {
+	prefix := "create index i on t(a) "
+	for _, tail := range []string{"'a;b'", "/* a;b */"} {
+		// The construct opens in the first Reader buffer and ends in the next.
+		first := prefix + strings.Repeat(" ", defaultBufSize-2-len(prefix)) + tail
+		testDDLTail(t, first+"; select 1", []string{first, "select 1"}, false)
+	}
+}
+
+func testDDLTail(t *testing.T, input string, want []string, backslash bool) {
+	t.Helper()
+	if !backslash {
+		// Parse intentionally retains master's lenient handling of partial DDL batches.
+		if stmt, err := Parse(input); err != nil {
+			t.Errorf("Parse(%q): %v", input, err)
+		} else if _, ok := stmt.(*DDL); !ok {
+			t.Errorf("Parse(%q): got %T, want DDL", input, stmt)
+		}
+	}
+	tokenizer := NewStringTokenizer(input)
+	tokenizer.AllowBackSlashEscape = backslash
+	queries, statements, err := ParseMultiple(tokenizer)
+	if err != nil {
+		t.Errorf("ParseMultiple(%q): %v", input, err)
+	} else if len(queries) != len(want) || len(statements) != len(want) {
+		t.Errorf("ParseMultiple(%q): got %v and %d statements, want %v", input, queries, len(statements), want)
+	} else {
+		for i, query := range queries {
+			if query != want[i] {
+				t.Errorf("ParseMultiple(%q): query %d = %q, want %q", input, i, query, want[i])
+			}
+		}
+	}
+	for _, tokenizer := range []*Tokenizer{NewStringTokenizer(input), NewTokenizer(strings.NewReader(input))} {
+		tokenizer.AllowBackSlashEscape = backslash
+		for i := range want {
+			stmt, err := ParseNext(tokenizer)
+			if err != nil {
+				t.Errorf("ParseNext(%q), statement %d: %v", input, i, err)
+				break
+			}
+			if i == 0 {
+				if _, ok := stmt.(*DDL); !ok {
+					t.Errorf("ParseNext(%q): got %T, want DDL", input, stmt)
+				}
+				if tokenizer.Position != len(want[0])+1 {
+					t.Errorf("ParseNext(%q): stopped at %d, want %d", input, tokenizer.Position, len(want[0])+1)
+				}
+			} else if String(stmt) != "select 1" {
+				t.Errorf("ParseNext(%q): second statement = %q, want select 1", input, String(stmt))
+			}
+		}
+		if _, err := ParseNext(tokenizer); err != io.EOF {
+			t.Errorf("ParseNext(%q): got %v after last statement, want EOF", input, err)
 		}
 	}
 }
