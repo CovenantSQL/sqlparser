@@ -785,6 +785,34 @@ func TestFloatColumnPrecisionSemicolonDefault(t *testing.T) {
 	}
 }
 
+func TestSkippedTailSingleStatements(t *testing.T) {
+	for _, input := range []string{
+		"EXPLAIN SELECT 'a;select 2 --'",
+		"create index i on t(a) where a = 'x;select 2 --'",
+	} {
+		t.Run(input, func(t *testing.T) {
+			if _, err := Parse(input); err != nil {
+				t.Fatal(err)
+			}
+			queries, statements, err := ParseMultiple(NewStringTokenizer(input))
+			if err != nil || len(queries) != 1 || len(statements) != 1 || queries[0] != input {
+				t.Fatalf("want one unchanged statement: %v, %v, %v", queries, statements, err)
+			}
+			for _, tokenizer := range []*Tokenizer{NewStringTokenizer(input), NewTokenizer(strings.NewReader(input))} {
+				if _, err := ParseNext(tokenizer); err != nil {
+					t.Fatal(err)
+				}
+				if tokenizer.Position != len(input)+1 {
+					t.Errorf("stopped at %d, want EOF at %d", tokenizer.Position, len(input)+1)
+				}
+				if _, err := ParseNext(tokenizer); err != io.EOF {
+					t.Errorf("after single statement: %v, want EOF", err)
+				}
+			}
+		})
+	}
+}
+
 func TestDDLTailSemicolons(t *testing.T) {
 	for _, prefix := range []string{"create index i on t(", "create table t (列 text check ("} {
 		for _, expression := range []string{
