@@ -875,11 +875,9 @@ func TestDDLRecoveryOpeners(t *testing.T) {
 		"CREATE TABLE t ([a;b] INTEGER)",
 		"CREATE TABLE t ([a'b] INTEGER)",
 		"CREATE TABLE t ([a--b] INTEGER)",
-		"CREATE TABLE t(a TEXT DEFAULT X'g;h')",
 		// These errors are already past a closing delimiter, or inside a
 		// fully consumed executable comment, and must not reopen it.
 		"CREATE TABLE t '['",
-		"CREATE TABLE t(a TEXT DEFAULT X'a')",
 		"CREATE TABLE t (`` INT)",
 		"CREATE TABLE t (/*! [ */ a INT)",
 	} {
@@ -918,7 +916,7 @@ func TestExplainTailSemicolons(t *testing.T) {
 }
 
 func TestParseNextRecoverySemicolons(t *testing.T) {
-	for _, first := range []string{"SELECT ) 'a;b'", "SELECT X'g;h'", "SELECT [a'b]"} {
+	for _, first := range []string{"SELECT ) 'a;b'", "SELECT [a'b]"} {
 		input := first + "; SELECT 1"
 		for _, tokenizer := range []*Tokenizer{NewStringTokenizer(input), NewTokenizer(strings.NewReader(input))} {
 			if _, err := ParseNext(tokenizer); err == nil {
@@ -933,18 +931,6 @@ func TestParseNextRecoverySemicolons(t *testing.T) {
 			if _, err := ParseNext(tokenizer); err != io.EOF {
 				t.Errorf("after last statement: %v", err)
 			}
-		}
-	}
-}
-
-func TestParseNextRecoveryUnterminatedHex(t *testing.T) {
-	input := "select x'78 from t; select 1 from t"
-	for _, tokenizer := range []*Tokenizer{NewStringTokenizer(input), NewTokenizer(strings.NewReader(input))} {
-		if _, err := ParseNext(tokenizer); err == nil {
-			t.Fatal("want an unterminated hex literal error")
-		}
-		if _, err := ParseNext(tokenizer); err != io.EOF {
-			t.Fatalf("unterminated hex literal: got %v, want EOF", err)
 		}
 	}
 }
@@ -1471,9 +1457,8 @@ var (
 		input:  "select 0xH from t",
 		output: "syntax error at position 10 near '0x'",
 	}, {
-		input:        "select x'78 from t",
-		output:       "syntax error at position 12 near '78'",
-		excludeMulti: true,
+		input:  "select x'78 from t",
+		output: "syntax error at position 12 near '78'",
 	}, {
 		input:  "select x'777' from t",
 		output: "syntax error at position 14 near '777'",

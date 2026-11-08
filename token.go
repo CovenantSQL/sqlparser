@@ -592,7 +592,6 @@ func (tkn *Tokenizer) scanHex() (int, []byte) {
 	buffer := &bytes2.Buffer{}
 	tkn.scanMantissa(16, buffer)
 	if tkn.lastChar != '\'' {
-		tkn.errorDelimiter = '\''
 		return LEX_ERROR, buffer.Bytes()
 	}
 	tkn.next()
